@@ -15,12 +15,12 @@ Usage:
     reward = get_score_fn("nemogym_math")(model_output="\\boxed{42}", label="42")
 """
 
-from mjnemogym.math_with_judge.app_copy import score_fn as math_score_fn
-from mjnemogym.code_gen.app_copy import score_fn as code_score_fn
-from mjnemogym.mcqa.app_copy import score_fn as mcqa_score_fn
-from mjnemogym.instruction_following.app_copy import score_fn as if_score_fn
-from mjnemogym.structured_outputs.app_copy import score_fn as so_score_fn
-from mjnemogym.workspace_assistant.app_copy import score_fn as wa_score_fn
+from mjnemogym.math_with_judge.score import score_fn as math_score_fn
+from mjnemogym.code_gen.score import score_fn as code_score_fn
+from mjnemogym.mcqa.score import score_fn as mcqa_score_fn
+from mjnemogym.instruction_following.score import score_fn as if_score_fn
+from mjnemogym.structured_outputs.score import score_fn as so_score_fn
+from mjnemogym.workspace_assistant.score import score_fn as wa_score_fn
 
 # Map data_source values (from parquet) to score functions
 score_fn_dict = {
