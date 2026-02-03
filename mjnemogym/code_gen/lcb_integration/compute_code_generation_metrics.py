@@ -59,16 +59,6 @@ def check_correctness(sample, generation, timeout, debug=True):
     except (ValueError, MemoryError):
         return [-1], None
 
-    if os.environ.get("CODEGEN_NO_SUBPROCESS", "0") == "1":
-        try:
-            result, metadata = run_test(in_outs, test=generation, debug=debug, timeout=timeout)
-            return result, metadata
-        except Exception as e:
-            if debug:
-                print(f"run_test exception: {e}")
-            return [-1 for _ in range(len(in_outs["inputs"]))], None
-
-    # Original subprocess mode (for isolation/extra timeout safety)
     manager = multiprocessing.Manager()
     result = manager.list()
     metadata_list = manager.list()
