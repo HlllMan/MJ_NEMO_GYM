@@ -7,7 +7,7 @@
 
 from typing import List, Literal, Optional
 
-from verifiable_instructions import instructions_registry
+from .verifiable_instructions import instructions_registry
 
 
 def _ensure_nltk_data():
