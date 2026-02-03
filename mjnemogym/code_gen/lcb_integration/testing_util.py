@@ -439,11 +439,26 @@ def run_test(in_outs, test=None, debug=False, timeout=6):
     if test(generated_code) is not None it'll try to run the code.
     otherwise it'll just return an input and output pair.
     """
-    signal.signal(signal.SIGALRM, timeout_handler_factory(debug))
+    import os as _os
+    import threading
+    _pid = _os.getpid()
+    _tid = threading.current_thread().name
+    print(f"[DEBUG run_test] PID={_pid} TID={_tid} ENTER run_test", flush=True)
+
+    try:
+        signal.signal(signal.SIGALRM, timeout_handler_factory(debug))
+        print(f"[DEBUG run_test] PID={_pid} signal handler set OK", flush=True)
+    except Exception as e:
+        print(f"[DEBUG run_test] PID={_pid} signal.signal FAILED: {type(e).__name__}: {e}", flush=True)
 
     # Disable functionalities that can make destructive changes to the test.
     # max memory is set to 4GB
-    reliability_guard(maximum_memory_bytes=4 * 1024**3)
+    print(f"[DEBUG run_test] PID={_pid} calling reliability_guard", flush=True)
+    try:
+        reliability_guard(maximum_memory_bytes=4 * 1024**3)
+        print(f"[DEBUG run_test] PID={_pid} reliability_guard OK", flush=True)
+    except Exception as e:
+        print(f"[DEBUG run_test] PID={_pid} reliability_guard FAILED: {type(e).__name__}: {e}", flush=True)
 
     if debug:
         print(f"start = {datetime.now().time()}")
@@ -476,6 +491,7 @@ def run_test(in_outs, test=None, debug=False, timeout=6):
             print(f"loading test code = {datetime.now().time()}")
 
         if which_type == CODE_TYPE.call_based:
+            print(f"[DEBUG run_test] PID={_pid} Executing CALL_BASED test, fn={method_name}", flush=True)
             signal.alarm(timeout)
             try:
                 results, metadata = grade_call_based(
@@ -485,8 +501,12 @@ def run_test(in_outs, test=None, debug=False, timeout=6):
                     fn_name=method_name,
                     timeout=timeout,
                 )
+                print(f"[DEBUG run_test] PID={_pid} grade_call_based returned: {results}", flush=True)
                 return results, metadata
             except Exception as e:
+                print(f"[DEBUG run_test] PID={_pid} grade_call_based EXCEPTION: {type(e).__name__}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 return [-4], {
                     "error_code": -4,
                     "error_message": f"Error during testing: {e}",
@@ -496,7 +516,7 @@ def run_test(in_outs, test=None, debug=False, timeout=6):
         elif which_type == CODE_TYPE.standard_input:
             # sol
             # if code has if __name__ == "__main__": then remove it
-
+            print(f"[DEBUG run_test] PID={_pid} Executing STANDARD_INPUT test", flush=True)
             signal.alarm(timeout)
             try:
                 results, metadata = grade_stdio(
@@ -505,8 +525,12 @@ def run_test(in_outs, test=None, debug=False, timeout=6):
                     all_outputs=in_outs["outputs"],
                     timeout=timeout,
                 )
+                print(f"[DEBUG run_test] PID={_pid} grade_stdio returned: {results}", flush=True)
                 return results, metadata
             except Exception as e:
+                print(f"[DEBUG run_test] PID={_pid} grade_stdio EXCEPTION: {type(e).__name__}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 return [-4], {
                     "error_code": -4,
                     "error_message": f"Error during testing: {e}",

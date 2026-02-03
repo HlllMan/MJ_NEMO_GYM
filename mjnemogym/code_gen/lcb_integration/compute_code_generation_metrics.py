@@ -36,9 +36,19 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def _temp_run(in_outs, generation, debug, result, metadata_list, timeout):
-    res, metadata = run_test(in_outs, test=generation, debug=debug, timeout=timeout)
-    result.append(res)
-    metadata_list.append(metadata)
+    import os
+    print(f"[DEBUG _temp_run] PID={os.getpid()} Starting run_test", flush=True)
+    try:
+        res, metadata = run_test(in_outs, test=generation, debug=debug, timeout=timeout)
+        print(f"[DEBUG _temp_run] PID={os.getpid()} run_test returned res={res}", flush=True)
+        result.append(res)
+        metadata_list.append(metadata)
+        print(f"[DEBUG _temp_run] PID={os.getpid()} Appended to result list, len={len(result)}", flush=True)
+    except Exception as e:
+        print(f"[DEBUG _temp_run] PID={os.getpid()} EXCEPTION in _temp_run: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 # Using SPREAD scheduling so that Ray assigns tasks to as many distinct nodes as possible.
@@ -52,40 +62,76 @@ def check_correctness(sample, generation, timeout, debug=True):
     """Check correctness of code generation with a global timeout.
     The global timeout is to catch some extreme/rare cases not handled by the timeouts
     inside `run_test`"""
+    import os as _os
+    _pid = _os.getpid()
+    _start_method = multiprocessing.get_start_method()
+    print(f"[DEBUG check_correctness] PID={_pid} start_method={_start_method}", flush=True)
 
     # Parse JSON once at the beginning to avoid multiple parsing
     try:
         in_outs = json.loads(sample["input_output"])
-    except (ValueError, MemoryError):
+    except (ValueError, MemoryError) as e:
+        print(f"[DEBUG check_correctness] PID={_pid} JSON parse failed: {e}", flush=True)
         return [-1], None
 
-    if os.environ.get("CODEGEN_NO_SUBPROCESS", "0") == "1":
+    num_tests = len(in_outs.get("inputs", []))
+    print(f"[DEBUG check_correctness] PID={_pid} num_tests={num_tests}", flush=True)
+
+    if _os.environ.get("CODEGEN_NO_SUBPROCESS", "0") == "1":
+        print(f"[DEBUG check_correctness] PID={_pid} NO_SUBPROCESS mode", flush=True)
         try:
             result, metadata = run_test(in_outs, test=generation, debug=debug, timeout=timeout)
+            print(f"[DEBUG check_correctness] PID={_pid} NO_SUBPROCESS result={result}", flush=True)
             return result, metadata
         except Exception as e:
-            if debug:
-                print(f"run_test exception: {e}")
+            print(f"[DEBUG check_correctness] PID={_pid} NO_SUBPROCESS exception: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             return [-1 for _ in range(len(in_outs["inputs"]))], None
 
     # Original subprocess mode (for isolation/extra timeout safety)
-    manager = multiprocessing.Manager()
-    result = manager.list()
-    metadata_list = manager.list()
+    print(f"[DEBUG check_correctness] PID={_pid} SUBPROCESS mode - creating Manager", flush=True)
+    try:
+        manager = multiprocessing.Manager()
+        result = manager.list()
+        metadata_list = manager.list()
+        print(f"[DEBUG check_correctness] PID={_pid} Manager created, creating Process", flush=True)
+    except Exception as e:
+        print(f"[DEBUG check_correctness] PID={_pid} Manager creation FAILED: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return [-1 for _ in range(num_tests)], None
+
     p = multiprocessing.Process(
         target=_temp_run,
         args=(in_outs, generation, debug, result, metadata_list, timeout),
     )
+
+    global_timeout = (timeout + 1) * len(in_outs["inputs"]) + 5
+    print(f"[DEBUG check_correctness] PID={_pid} Starting subprocess, global_timeout={global_timeout}", flush=True)
+
     p.start()
-    p.join(timeout=(timeout + 1) * len(in_outs["inputs"]) + 5)
+    print(f"[DEBUG check_correctness] PID={_pid} Subprocess started as PID={p.pid}", flush=True)
+
+    p.join(timeout=global_timeout)
+
     if p.is_alive():
+        print(f"[DEBUG check_correctness] PID={_pid} Subprocess TIMEOUT - killing", flush=True)
         p.kill()
+        p.join()  # Wait for kill to complete
+
+    print(f"[DEBUG check_correctness] PID={_pid} Subprocess exitcode={p.exitcode}, result_len={len(result)}", flush=True)
+
     if not result:
         # consider that all tests failed
+        print(f"[DEBUG check_correctness] PID={_pid} EMPTY RESULT - subprocess likely crashed or timed out", flush=True)
         result = [[-1 for i in range(len(in_outs["inputs"]))]]
         metadata_list = [None]
         if debug:
             print("global timeout")
+    else:
+        print(f"[DEBUG check_correctness] PID={_pid} Got result: {result[0]}", flush=True)
+
     return result[0], metadata_list[0]
 
 

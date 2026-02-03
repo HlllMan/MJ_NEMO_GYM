@@ -42,7 +42,12 @@ def verify_code(
             - result: List of test results
             - metadata: Additional metadata from execution
     """
+    import os
+    _pid = os.getpid()
+    print(f"[DEBUG verify_code] PID={_pid} ENTER verify_code", flush=True)
+
     if not model_output or not model_output.strip():
+        print(f"[DEBUG verify_code] PID={_pid} Empty model_output", flush=True)
         return 0.0, None, None, None
 
     # Validate unit tests
@@ -51,21 +56,30 @@ def verify_code(
     # Extract code (code fence or raw)
     code = extract_code(model_output, LMStyle.OpenAIChat)
     if not code:
+        print(f"[DEBUG verify_code] PID={_pid} No code extracted", flush=True)
         return 0.0, None, None, None
+
+    print(f"[DEBUG verify_code] PID={_pid} Code extracted, len={len(code)}", flush=True)
 
     # Run unit tests (synchronously, no ray)
     sample = {"input_output": tests.model_dump_json()}
 
     try:
+        print(f"[DEBUG verify_code] PID={_pid} Calling check_correctness", flush=True)
         result, metadata = check_correctness(
             sample,
             code,
             timeout_secs,
             debug,
         )
+        print(f"[DEBUG verify_code] PID={_pid} check_correctness returned: result={result}", flush=True)
         reward = 1.0 if all(r == True for r in result) else 0.0
+        print(f"[DEBUG verify_code] PID={_pid} Final reward={reward}", flush=True)
         return reward, code, result, metadata
     except Exception as e:
+        print(f"[DEBUG verify_code] PID={_pid} EXCEPTION: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         if debug:
             print(f"Error during code verification: {e}")
         return 0.0, code, None, None
