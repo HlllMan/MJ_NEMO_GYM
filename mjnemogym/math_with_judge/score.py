@@ -7,6 +7,8 @@
 
 import contextlib
 import logging
+import sys
+import traceback
 from io import StringIO
 from typing import Optional
 
@@ -14,6 +16,21 @@ from math_verify import grader
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+
+# Configure module-level logger for Ray compatibility
+_logger = logging.getLogger("mjnemogym.math_with_judge")
+_logger.setLevel(logging.DEBUG)
+
+# Only add handler if not already configured
+if not _logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setLevel(logging.DEBUG)
+    _handler.setFormatter(logging.Formatter(
+        "[%(asctime)s][mjnemogym.math][%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    _logger.addHandler(_handler)
+    _logger.propagate = False
 
 
 class MathVerifier:
@@ -85,7 +102,13 @@ class MathVerifier:
         # It's possible to emit a TimeoutException and that wouldn't be caught since
         # it actually subclasses from BaseException and math-verify itself does not
         # catch it.
-        except (Exception, TimeoutException):
+        except (Exception, TimeoutException) as e:
+            error_msg = f"[mjnemogym.math] verify_answer failed: {type(e).__name__}: {e}"
+            _logger.error(error_msg, exc_info=True)
+            # Also print to stderr with flush to ensure Ray captures it
+            print(error_msg, file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
             return 0.0, None
 
 
@@ -112,8 +135,18 @@ def score_fn(model_output: str, extra_info: dict) -> float:
     Returns:
         float: 1.0 (correct) or 0.0 (incorrect)
     """
+    # Debug: log extra_info type to diagnose Ray serialization issues
+    if not isinstance(extra_info, dict):
+        error_msg = f"[mjnemogym.math] score_fn received extra_info of type {type(extra_info).__name__}, expected dict. Value preview: {str(extra_info)[:200]}"
+        _logger.error(error_msg)
+        print(error_msg, file=sys.stderr, flush=True)
+        return 0.0
+
     expected_answer = extra_info.get("expected_answer", "")
     if not expected_answer:
+        warn_msg = f"[mjnemogym.math] score_fn: expected_answer is empty or missing. extra_info keys: {list(extra_info.keys())}"
+        _logger.warning(warn_msg)
+        print(warn_msg, file=sys.stderr, flush=True)
         return 0.0
 
     verifier = _get_verifier()

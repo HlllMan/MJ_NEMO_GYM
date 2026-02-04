@@ -15,6 +15,26 @@ Usage:
     reward = get_score_fn("nemogym_math")(model_output="\\boxed{42}", label="42")
 """
 
+import logging
+import sys
+import traceback
+
+# Configure module-level logger for Ray compatibility
+# Force logs to stderr (which Ray captures) with immediate flush
+_logger = logging.getLogger("mjnemogym")
+_logger.setLevel(logging.DEBUG)
+
+# Only add handler if not already configured (avoid duplicates)
+if not _logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setLevel(logging.DEBUG)
+    _handler.setFormatter(logging.Formatter(
+        "[%(asctime)s][mjnemogym][%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    _logger.addHandler(_handler)
+    _logger.propagate = False  # Don't propagate to root logger
+
 from mjnemogym.math_with_judge.score import score_fn as math_score_fn
 from mjnemogym.code_gen.score import score_fn as code_score_fn
 from mjnemogym.mcqa.score import score_fn as mcqa_score_fn
@@ -109,11 +129,19 @@ def verl_compute_score(
             f"Available: {list(score_fn_dict.keys())}"
         )
 
-    if extra_info is None:
-        extra_info = {}
-
     score_fn = score_fn_dict[data_source]
-    return float(score_fn(solution_str, extra_info))
+    try:
+        score = float(score_fn(solution_str, extra_info))
+        return score
+    except Exception as e:
+        # Use module logger + print to stderr for Ray visibility
+        error_msg = f"[mjnemogym] Error computing score for {data_source}: {type(e).__name__}: {e}"
+        _logger.error(error_msg, exc_info=True)
+        # Also print to stderr with flush to ensure Ray captures it
+        print(error_msg, file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        return 0.0
 
 
 __all__ = [
