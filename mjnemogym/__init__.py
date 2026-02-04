@@ -21,6 +21,7 @@ from mjnemogym.mcqa.score import score_fn as mcqa_score_fn
 from mjnemogym.instruction_following.score import score_fn as if_score_fn
 from mjnemogym.structured_outputs.score import score_fn as so_score_fn
 from mjnemogym.workplace_assistant.score import score_fn as wa_score_fn
+from mjnemogym.qydomain.score import score_fn as qy_score_fn
 import functools
 
 
@@ -49,6 +50,10 @@ score_fn_dict = {
     "nemogym_if": extract_final_answer(if_score_fn),
     "nemogym_structured": extract_final_answer(so_score_fn),
     "nemogym_workplace": extract_final_answer(wa_score_fn),
+    # QY domains - all route to qy_score_fn which internally routes by task_type
+    "qy_typos": extract_final_answer(qy_score_fn),
+    "qy_connections": extract_final_answer(qy_score_fn),
+    "qy_unscrambling": extract_final_answer(qy_score_fn),
 }
 
 
@@ -123,6 +128,7 @@ __all__ = [
     "if_score_fn",
     "so_score_fn",
     "wa_score_fn",
+    "qy_score_fn",
     "score_fn_dict",
     "get_score_fn",
     "verl_compute_score",
