@@ -20,6 +20,8 @@ import json
 import multiprocessing
 import os
 import sys
+import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -33,6 +35,16 @@ from mjnemogym.code_gen.lcb_integration.testing_util import run_test
 
 sys.set_int_max_str_digits(50000)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Debug logging for hang diagnosis
+DEBUG_CODEGEN = True
+
+def _debug_log(msg: str):
+    """Thread-safe debug logging for code_gen."""
+    if DEBUG_CODEGEN:
+        pid = os.getpid()
+        ts = time.strftime("%H:%M:%S")
+        print(f"[CODEGEN {ts} pid={pid}] {msg}", flush=True)
 
 
 def _temp_run(in_outs, generation, debug, result, metadata_list, timeout):
@@ -57,25 +69,63 @@ def check_correctness(sample, generation, timeout, debug=True):
     try:
         in_outs = json.loads(sample["input_output"])
     except (ValueError, MemoryError):
+        _debug_log("JSON parse failed")
         return [-1], None
 
+    num_inputs = len(in_outs.get("inputs", []))
+    join_timeout = (timeout + 1) * num_inputs + 5
+    _debug_log(f"check_correctness: num_inputs={num_inputs}, join_timeout={join_timeout}s")
+
+    _debug_log("Creating Manager...")
+    manager_start = time.time()
     manager = multiprocessing.Manager()
+    _debug_log(f"Manager created in {time.time() - manager_start:.2f}s")
+
     result = manager.list()
     metadata_list = manager.list()
+
+    _debug_log("Creating subprocess...")
     p = multiprocessing.Process(
         target=_temp_run,
         args=(in_outs, generation, debug, result, metadata_list, timeout),
     )
+
+    _debug_log("Starting subprocess...")
     p.start()
-    p.join(timeout=(timeout + 1) * len(in_outs["inputs"]) + 5)
+    _debug_log(f"Subprocess started (pid={p.pid}), waiting up to {join_timeout}s...")
+
+    p.join(timeout=join_timeout)
+
     if p.is_alive():
+        _debug_log(f"Subprocess {p.pid} still alive after timeout, killing...")
         p.kill()
+        p.join(timeout=5)  # Wait up to 5s for kill to complete
+        if p.is_alive():
+            _debug_log(f"WARNING: Subprocess {p.pid} still alive after kill!")
+        else:
+            _debug_log(f"Subprocess {p.pid} killed successfully")
+    else:
+        _debug_log(f"Subprocess {p.pid} completed normally")
+
+    _debug_log(f"Reading results from manager.list (len={len(result)})...")
     if not result:
         # consider that all tests failed
-        result = [[-1 for i in range(len(in_outs["inputs"]))]]
+        result = [[-1 for i in range(num_inputs)]]
         metadata_list = [None]
         if debug:
             print("global timeout")
+        _debug_log("No results - global timeout occurred")
+    else:
+        _debug_log(f"Got results: {len(result[0])} test results")
+
+    # Explicitly shutdown manager to prevent zombie servers
+    _debug_log("Shutting down manager...")
+    try:
+        manager.shutdown()
+        _debug_log("Manager shutdown complete")
+    except Exception as e:
+        _debug_log(f"Manager shutdown error: {e}")
+
     return result[0], metadata_list[0]
 
 

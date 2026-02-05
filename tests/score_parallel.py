@@ -12,13 +12,26 @@
 import argparse
 import json
 import multiprocessing
+import os
 import time
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple
 
 from tqdm import tqdm
 
 from mjnemogym import score_fn_dict
+
+# Debug logging with timestamps
+DEBUG_HANG = True  # Set to True to enable hang debugging
+
+def debug_log(msg: str):
+    """Thread-safe debug logging with PID and timestamp."""
+    if DEBUG_HANG:
+        pid = os.getpid()
+        tid = threading.current_thread().name
+        ts = time.strftime("%H:%M:%S")
+        print(f"[DEBUG {ts} pid={pid} {tid}] {msg}", flush=True)
 
 
 def score_single(args: Tuple[int, dict]) -> Tuple[int, dict, float]:
@@ -31,9 +44,16 @@ def score_single(args: Tuple[int, dict]) -> Tuple[int, dict, float]:
     data_source = item.get("data_source", "")
     response = item.get("response", "")
     extra_info = item.get("extra_info", {})
+    idx = extra_info.get('index', line_idx)
+
+    debug_log(f"START scoring line={line_idx} domain={data_source} idx={idx}")
+    start_time = time.time()
 
     score_fn = score_fn_dict[data_source]
     reward = score_fn(response, extra_info)
+
+    elapsed = time.time() - start_time
+    debug_log(f"DONE scoring line={line_idx} domain={data_source} idx={idx} reward={reward} elapsed={elapsed:.2f}s")
 
     print(f"{data_source}_index_{extra_info['index']}_rew_{reward}", flush=True)
     return (line_idx, item, reward)
@@ -98,13 +118,19 @@ def main():
 
     start_time = time.time()
 
+    # Track pending futures for debugging
+    pending_count = total
+    last_progress_time = time.time()
+    HANG_TIMEOUT = 120  # Log warning if no progress for 2 minutes
+
     with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as executor:
         futures = {executor.submit(score_single, item): item[0] for item in data}
+        debug_log(f"Submitted {len(futures)} tasks to executor")
 
         with tqdm(total=total, desc="Scoring", unit="sample") as pbar:
             for future in as_completed(futures):
                 try:
-                    line_idx, item, reward = future.result()
+                    line_idx, item, reward = future.result(timeout=300)  # 5min timeout per result
                     item["reward"] = reward
                     results[line_idx] = item
                     total_reward += reward
@@ -114,13 +140,31 @@ def main():
                         domain_rewards.get(ds, 0) + reward
                     )
 
-                except Exception as e:
+                    pending_count -= 1
+                    last_progress_time = time.time()
+
+                except TimeoutError:
                     line_idx = futures[future]
+                    debug_log(f"TIMEOUT waiting for result line={line_idx}")
                     results[line_idx] = data[line_idx][1]
                     results[line_idx]["reward"] = 0.0
+                    pending_count -= 1
+
+                except Exception as e:
+                    line_idx = futures[future]
+                    debug_log(f"EXCEPTION for line={line_idx}: {type(e).__name__}: {e}")
+                    results[line_idx] = data[line_idx][1]
+                    results[line_idx]["reward"] = 0.0
+                    pending_count -= 1
 
                 pbar.update(1)
-                pbar.set_postfix(reward=f"{total_reward:.0f}", refresh=False)
+                pbar.set_postfix(reward=f"{total_reward:.0f}", pending=pending_count, refresh=False)
+
+                # Check for potential hang
+                if pending_count <= 10:
+                    debug_log(f"NEAR_END: {pending_count} items remaining")
+
+        debug_log("Exiting executor context manager (waiting for shutdown)")
 
     elapsed = time.time() - start_time
 
