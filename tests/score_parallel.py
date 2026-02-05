@@ -162,7 +162,14 @@ def main():
 
                 # Check for potential hang
                 if pending_count <= 10:
-                    debug_log(f"NEAR_END: {pending_count} items remaining")
+                    # Find which items are still pending
+                    pending_lines = [futures[f] for f in futures if not f.done()]
+                    pending_domains = []
+                    for pl in pending_lines[:5]:  # Show up to 5
+                        d = data[pl][1].get("data_source", "?")
+                        idx = data[pl][1].get("extra_info", {}).get("index", "?")
+                        pending_domains.append(f"line={pl}/domain={d}/idx={idx}")
+                    debug_log(f"NEAR_END: {pending_count} items remaining: {pending_domains}")
 
         debug_log("Exiting executor context manager (waiting for shutdown)")
 

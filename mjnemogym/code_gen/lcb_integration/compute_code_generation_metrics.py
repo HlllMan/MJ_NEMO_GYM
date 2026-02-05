@@ -110,13 +110,17 @@ def check_correctness(sample, generation, timeout, debug=True):
     _debug_log(f"Reading results from manager.list (len={len(result)})...")
     if not result:
         # consider that all tests failed
-        result = [[-1 for i in range(num_inputs)]]
-        metadata_list = [None]
+        final_result = [-1 for i in range(num_inputs)]
+        final_metadata = None
         if debug:
             print("global timeout")
         _debug_log("No results - global timeout occurred")
     else:
-        _debug_log(f"Got results: {len(result[0])} test results")
+        # IMPORTANT: Copy results BEFORE shutting down manager
+        # result and metadata_list are manager proxies - accessing after shutdown causes BrokenPipeError
+        final_result = list(result[0])
+        final_metadata = dict(metadata_list[0]) if metadata_list[0] else None
+        _debug_log(f"Got results: {len(final_result)} test results")
 
     # Explicitly shutdown manager to prevent zombie servers
     _debug_log("Shutting down manager...")
@@ -126,7 +130,7 @@ def check_correctness(sample, generation, timeout, debug=True):
     except Exception as e:
         _debug_log(f"Manager shutdown error: {e}")
 
-    return result[0], metadata_list[0]
+    return final_result, final_metadata
 
 
 def evaluate_generations_by_problem(args):
