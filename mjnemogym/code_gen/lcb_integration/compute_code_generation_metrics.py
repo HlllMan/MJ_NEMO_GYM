@@ -25,7 +25,6 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
-import ray
 from tqdm import tqdm
 
 from mjnemogym.code_gen.lcb_integration.pass_k_utils import compute_metrics_from_results
@@ -42,13 +41,6 @@ def _temp_run(in_outs, generation, debug, result, metadata_list, timeout):
     res, metadata = run_test(in_outs, test=generation, debug=debug, timeout=timeout)
     result.append(res)
     metadata_list.append(metadata)
-
-
-# Using SPREAD scheduling so that Ray assigns tasks to as many distinct nodes as possible.
-@ray.remote(scheduling_strategy="SPREAD")
-def check_correctness_remote(sample, generation, timeout, debug=True):
-    """Ray wrapper of check_correctness for remote execution."""
-    return check_correctness(sample, generation, timeout, debug)
 
 
 def check_correctness(sample, generation, timeout, debug=True):
