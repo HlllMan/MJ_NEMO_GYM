@@ -3,8 +3,8 @@
 #
 # Thread-safe wrapper added for Ray compatibility.
 
-import concurrent.futures
 import re
+import threading
 from typing import Tuple
 
 from math_verify import parse, verify
@@ -18,24 +18,31 @@ TIMEOUT = 10.0
 
 
 def _run_with_timeout(func, timeout: float, default=None):
-    """Run a function with a thread-safe timeout.
+    """Run a function with a timeout using a daemon thread.
 
-    NOTE: Uses shutdown(wait=False, cancel_futures=True) to avoid blocking
-    if the submitted function hangs (e.g. math_verify parse/verify with no internal timeout).
-    The abandoned daemon thread will eventually be cleaned up when the process exits.
+    Uses daemon=True so the thread is killed immediately when the worker
+    process exits, preventing ProcessPoolExecutor shutdown from hanging.
     """
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    try:
-        future = executor.submit(func)
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
+    result_box = [default]
+    exc_box = [None]
+
+    def wrapper():
+        try:
+            result_box[0] = func()
+        except Exception as e:
+            exc_box[0] = e
+
+    t = threading.Thread(target=wrapper, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
         _logger.warning(f"Operation timed out after {timeout}s")
         return default
-    except Exception as e:
-        _logger.debug(f"Operation failed: {e}")
+    if exc_box[0] is not None:
+        _logger.debug(f"Operation failed: {exc_box[0]}")
         return default
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    return result_box[0]
 
 
 def extract_answer(text: str) -> str:
