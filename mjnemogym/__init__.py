@@ -76,14 +76,14 @@ _logger = logging.getLogger("mjnemogym.timeout")
 # ---------------------------------------------------------------------------
 DOMAIN_TIMEOUTS = {
     "nemogym_math": 30,
-    "nemogym_code": 45,
+    "nemogym_code": 60,
     "nemogym_mcqa": 5,
     "nemogym_if": 10,
     "nemogym_structured": 5,
     "nemogym_workplace": 15,
     "typos": 5,
     "connections": 5,
-    "unscrambling": 10,
+    "unscrambling": 20,
 }
 
 # Absolute maximum for any domain (fallback if domain not in DOMAIN_TIMEOUTS)
