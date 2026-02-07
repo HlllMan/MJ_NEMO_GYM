@@ -61,9 +61,11 @@ _logger = logging.getLogger("mjnemogym.timeout")
 #   nemogym_math:   3-method fallback chain. Internal timeouts: qy_parser=10s,
 #                   math_verify=5s parse + 5s verify. Worst case all 3 fail:
 #                   ~25s. Set 30s for headroom.
-#   nemogym_code:   check_correctness runs user code in subprocess with
-#                   timeout_secs=10 per test case. Multiple test cases possible.
-#                   Set 60s.
+#   nemogym_code:   check_correctness runs user code in subprocess.
+#                   _parent_timeout is passed down so child computes:
+#                     join_timeout = parent_timeout - CLEANUP_MARGIN_S (15s)
+#                   INVARIANT: join_timeout < this timeout → cleanup always runs.
+#                   Safe to adjust this value — children auto-adapt.
 #   nemogym_mcqa:   Pure regex matching. <0.01s typical. 5s is generous.
 #   nemogym_if:     Instruction class instantiation + rule checks. <0.1s. 10s.
 #   nemogym_structured: JSON schema validation. <0.01s. 5s.
@@ -74,7 +76,7 @@ _logger = logging.getLogger("mjnemogym.timeout")
 # ---------------------------------------------------------------------------
 DOMAIN_TIMEOUTS = {
     "nemogym_math": 30,
-    "nemogym_code": 60,
+    "nemogym_code": 45,
     "nemogym_mcqa": 5,
     "nemogym_if": 10,
     "nemogym_structured": 5,
@@ -282,6 +284,12 @@ def verl_compute_score(
 
     timeout = DOMAIN_TIMEOUTS.get(data_source, DEFAULT_TIMEOUT)
     fn = score_fn_dict[data_source]
+
+    # Pass parent timeout to children so they can compute their own
+    # timeouts relative to ours. This ensures the invariant:
+    #   child_timeout < parent_timeout  →  cleanup always runs
+    # No hardcoded caps needed — children derive from this value.
+    extra_info["_parent_timeout"] = timeout
 
     t0 = time.time()
     score = _run_score_with_timeout(

@@ -20,6 +20,7 @@ import json
 import multiprocessing
 import os
 import sys
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -43,10 +44,25 @@ def _temp_run(in_outs, generation, debug, result, metadata_list, timeout):
     metadata_list.append(metadata)
 
 
-def check_correctness(sample, generation, timeout, debug=True):
+
+# Time reserved for cleanup after join_timeout expires:
+#   p.terminate (3s) + p.kill (2s) + manager.shutdown (5s) = 10s
+# join_timeout = parent_timeout - CLEANUP_MARGIN_S
+# This guarantees: join_timeout + cleanup < parent_timeout → no zombies.
+CLEANUP_MARGIN_S = 15
+
+
+def check_correctness(sample, generation, timeout, debug=True, parent_timeout=None):
     """Check correctness of code generation with a global timeout.
     The global timeout is to catch some extreme/rare cases not handled by the timeouts
-    inside `run_test`"""
+    inside `run_test`
+
+    Args:
+        parent_timeout: Outer timeout from _run_score_with_timeout (Layer 1).
+            If provided, join_timeout is capped at (parent_timeout - CLEANUP_MARGIN_S)
+            to guarantee cleanup code always runs before Layer 1 abandons us.
+            If None (standalone usage), falls back to raw calculation.
+    """
 
     # Parse JSON once at the beginning to avoid multiple parsing
     try:
@@ -56,8 +72,29 @@ def check_correctness(sample, generation, timeout, debug=True):
         return [-1], None
 
     num_inputs = len(in_outs.get("inputs", []))
-    join_timeout = (timeout + 1) * num_inputs + 5
-    _logger.debug(f"check_correctness: num_inputs={num_inputs}, join_timeout={join_timeout}s")
+    raw_join_timeout = (timeout + 1) * num_inputs + 5
+
+    # SAFETY: Cap join_timeout so it's ALWAYS shorter than the outer
+    # _run_score_with_timeout (Layer 1). The invariant:
+    #   join_timeout + cleanup_time < parent_timeout
+    # This ensures p.kill() and manager.shutdown() ALWAYS run before
+    # Layer 1 abandons the daemon thread.
+    #
+    # Without this: join_timeout=555s >> parent=45s → cleanup NEVER runs
+    #   → zombie subprocess + Manager server accumulation → training hang
+    # With this:    join_timeout=30s  <  parent=45s → cleanup runs normally
+    if parent_timeout is not None:
+        max_join = max(parent_timeout - CLEANUP_MARGIN_S, 5)
+        join_timeout = min(raw_join_timeout, max_join)
+    else:
+        # Standalone usage (no parent timeout) — use raw value
+        join_timeout = raw_join_timeout
+
+    _logger.debug(
+        f"check_correctness: num_inputs={num_inputs}, "
+        f"join_timeout={join_timeout}s (raw={raw_join_timeout}s, "
+        f"parent_timeout={parent_timeout}s, margin={CLEANUP_MARGIN_S}s)"
+    )
 
     manager = multiprocessing.Manager()
     result = manager.list()
@@ -72,9 +109,20 @@ def check_correctness(sample, generation, timeout, debug=True):
     p.join(timeout=join_timeout)
 
     if p.is_alive():
-        _logger.warning(f"subprocess pid={p.pid} still alive after {join_timeout}s, killing")
-        p.kill()
-        p.join(timeout=5)
+        _logger.warning(f"subprocess pid={p.pid} still alive after {join_timeout}s, terminating")
+        # SIGTERM first (graceful), then SIGKILL if needed
+        try:
+            p.terminate()
+            p.join(timeout=3)
+        except Exception:
+            pass
+        if p.is_alive():
+            _logger.warning(f"subprocess pid={p.pid} still alive after SIGTERM, sending SIGKILL")
+            try:
+                p.kill()
+                p.join(timeout=2)
+            except Exception:
+                pass
 
     if not result:
         # consider that all tests failed
@@ -87,11 +135,20 @@ def check_correctness(sample, generation, timeout, debug=True):
         final_metadata = dict(metadata_list[0]) if metadata_list[0] else None
         _logger.debug(f"got {len(final_result)} test results")
 
-    # Shutdown manager to prevent zombie server processes
-    try:
-        manager.shutdown()
-    except Exception:
-        pass
+    # Shutdown manager to prevent zombie server processes.
+    # manager.shutdown() can itself hang (e.g., broken pipe to server process),
+    # so we run it in a daemon thread with a short timeout.
+    def _shutdown_manager():
+        try:
+            manager.shutdown()
+        except Exception:
+            pass
+
+    shutdown_t = threading.Thread(target=_shutdown_manager, daemon=True)
+    shutdown_t.start()
+    shutdown_t.join(timeout=5)
+    if shutdown_t.is_alive():
+        _logger.warning("manager.shutdown() timed out after 5s, abandoning")
 
     return final_result, final_metadata
 

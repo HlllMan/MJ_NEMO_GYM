@@ -28,6 +28,7 @@ def verify_code(
     unit_tests: Dict[str, Any],
     timeout_secs: int = 10,
     debug: bool = False,
+    parent_timeout: float = None,
 ) -> tuple[float, Optional[str], Optional[List[bool]], Optional[Dict[str, Any]]]:
     """
     Verify code generation - core logic from app.py CompCodingResourcesServer.verify()
@@ -37,6 +38,9 @@ def verify_code(
         unit_tests: Dict with "inputs", "outputs", and optional "fn_name"
         timeout_secs: Timeout for unit test execution
         debug: Enable debug output
+        parent_timeout: Outer timeout from _run_score_with_timeout. Passed to
+            check_correctness so it can bound its join_timeout to always be
+            shorter than the parent, ensuring cleanup code always runs.
 
     Returns:
         (reward, extracted_code, result, metadata):
@@ -65,6 +69,7 @@ def verify_code(
             code,
             timeout_secs,
             debug,
+            parent_timeout=parent_timeout,
         )
         reward = 1.0 if all(r == True for r in result) else 0.0
         return reward, code, result, metadata
@@ -101,12 +106,14 @@ def score_fn(model_output: str, extra_info: dict) -> float:
 
     timeout_secs = extra_info.get("timeout_secs", 10)
     debug = extra_info.get("debug", False)
+    parent_timeout = extra_info.get("_parent_timeout", None)
 
     reward, _, _, _ = verify_code(
         model_output=model_output,
         unit_tests=unit_tests,
         timeout_secs=timeout_secs,
         debug=debug,
+        parent_timeout=parent_timeout,
     )
 
     _logger.debug(f"DONE idx={idx} reward={reward} elapsed={time.time()-t0:.2f}s")
